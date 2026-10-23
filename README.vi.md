@@ -60,6 +60,19 @@ Các tài nguyên này được dump từ firmware gốc:
 
 Kiểm tra phiên bản mới nhất trong phần [Releases](https://github.com/michioxd/openwrt-wf810df/releases/latest).
 
+## Build
+
+Repo đã kèm cấu hình build đã kiểm thử trên phần cứng trong `.config`, gồm profile FPT AX3000CV2 và LuCI. Từ bản clone sạch:
+
+```sh
+./scripts/feeds update -a
+./scripts/feeds install -a
+make defconfig
+make -j$(nproc)
+```
+
+Ảnh được tạo trong `bin/targets/qualcommax/ipq50xx/`.
+
 ## Cài đặt
 
 > [!CAUTION]
