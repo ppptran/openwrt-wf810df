@@ -170,6 +170,11 @@
 					 */
 					phy-mode = "2500base-x";
 					ethernet = <&dp2>;
+					/* The CPU port speaks plain 802.1Q with the
+					 * tag_8021q source-port VIDs, which is what
+					 * the NSS firmware on the conduit expects.
+					 */
+					dsa-tag-protocol = "yt921x-8021q";
 					
 					fixed-link {
 						speed = <2500>;
