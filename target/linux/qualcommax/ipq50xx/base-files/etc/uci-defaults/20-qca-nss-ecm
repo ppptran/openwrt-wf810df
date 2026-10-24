@@ -1,0 +1,11 @@
+#!/bin/sh
+
+[ -x /etc/init.d/qca-nss-ecm ] || exit 0
+
+uci -q set ecm.global.acceleration_engine='nss'
+uci -q commit ecm
+
+/etc/init.d/qca-nss-ecm enable
+/etc/init.d/qca-nss-ecm start
+
+exit 0

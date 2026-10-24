@@ -1,0 +1,49 @@
+nss_core: dump the boot state when bootwait times out
+
+nss_bootwait() can only report "core did not boot" by timing out. When it
+does, print the CSM state, the if_map magic and the first 64 bytes of the
+firmware log ring, so a failed bring-up is diagnosable from dmesg alone
+without a UART session and a devmem walk.
+
+Temporary diagnostic; remove once the IPQ5018 bring-up is verified.
+
+--- a/nss_core.c
++++ b/nss_core.c
+@@ -2250,6 +2250,37 @@
+ 	{
+ 		msleep(100);
+ 	}
++
++	{
++		struct nss_ctx_instance *ctx = &nss_top_main.nss[0];
++		struct nss_meminfo_ctx *m = &ctx->meminfo_ctx;
++
++		pr_info("nss-dbg: bootstate=%d\n", nss_bootstate);
++		pr_info("nss-dbg: csm id=%08x reset=%08x bar=%08x amc=%08x boot=%08x\n",
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_ID_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_RESET_CTRL_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_BAR_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_AMC_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_BOOT_ADDR_OFFSET));
++		pr_info("nss-dbg: csm stat0=%08x stat1=%08x type2=%08x type3=%08x ifetch=%08x\n",
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_INT_STAT0_TYPE_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_INT_STAT1_TYPE_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_INT_STAT2_TYPE_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_INT_STAT3_TYPE_OFFSET),
++			nss_read_32(ctx->nmap, NSS_REGS_CORE_IFETCH_RANGE_OFFSET));
++		if (m->if_map) {
++			pr_info("nss-dbg: if_map %px magic=%08x expect=%08x\n",
++				m->if_map, m->if_map->magic, DEV_MAGIC);
++		}
++		if (m->logbuffer) {
++			const uint32_t *w = (const uint32_t *)m->logbuffer;
++
++			pr_info("nss-dbg: logbuf dma=%08x [%08x %08x %08x %08x %08x %08x %08x %08x]\n",
++				m->logbuffer_dma, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++			pr_info("nss-dbg: logbuf+20 [%08x %08x %08x %08x %08x %08x %08x %08x]\n",
++				w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
++		}
++	}
+ }
+ 
+ /*

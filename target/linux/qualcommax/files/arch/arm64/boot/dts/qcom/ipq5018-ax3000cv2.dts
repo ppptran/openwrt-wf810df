@@ -8,6 +8,7 @@
 #include "ipq5018.dtsi"
 #include "ipq5018-ess.dtsi"
 #include "ipq5018-qcn6122.dtsi"
+#include "ipq5018-nss.dtsi"
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
@@ -30,8 +31,23 @@
 	};
 	
 	chosen {
-		bootargs-append = " root=/dev/ubiblock0_1 coherent_pool=2M";
+		/* clk_ignore_unused/pd_ignore_unused keep the UBI0 clocks and
+		 * power domains that the NSS firmware uses but no Linux driver
+		 * claims from being switched off by the late initcalls.
+		 */
+		bootargs-append = " root=/dev/ubiblock0_1 coherent_pool=2M clk_ignore_unused pd_ignore_unused";
 		stdout-path = "serial0:115200n8";
+	};
+
+	/* The UBI32 firmware is loaded at 0x40000000 and uses the 16 MiB
+	 * below the kernel load address (0x41000000). This merges into the
+	 * reserved-memory node of ipq5018.dtsi.
+	 */
+	reserved-memory {
+		nss_region: nss@40000000 {
+			reg = <0x0 0x40000000 0x0 0x1000000>;
+			no-map;
+		};
 	};
 	
 	keys {
@@ -547,6 +563,7 @@
 
 &wifi1 {
 	status = "okay";
+	nss-radio-priority = <1>;
 	
 	qcom,rproc = <&q6_wcss_pd2>;
 	qcom,ath11k-fw-memory-mode = <1>;

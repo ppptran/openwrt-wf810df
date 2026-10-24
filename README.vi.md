@@ -39,7 +39,24 @@ Trong này có thể bao gồm những thành phần như xác thực phần c�
 
 ### Các vấn đề đã biết
 
-- Offload không rõ.
+- Offload NSS vẫn đang thử nghiệm. Core NSS 12.5 boot được và ECM có theo dõi kết nối,
+  nhưng offload LAN chưa hoạt động: các cổng DSA YT9215S chưa được đăng ký với NSS.
+  Offload Wi-Fi chưa được bật.
+
+### Offload NSS (thử nghiệm)
+
+Stack QCA NSS 12.5 lấy từ feed `nss`; hai gói đã được patch là `qca-nss-drv` và
+`qca-nss-ecm` nằm trong feed cục bộ `nss-local/` (được track trong repo) và sẽ được ưu
+tiên khi chạy `scripts/feeds install`. Sau khi chạy `./scripts/feeds update -a` như bình
+thường, bật:
+
+```
+CONFIG_PACKAGE_kmod-qca-nss-drv=y
+CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+CONFIG_PACKAGE_nss-firmware-ipq50xx=y
+```
+
+Lần boot đầu tiên sẽ tự cấu hình UCI (`acceleration_engine=nss`).
 
 
 ## Tài nguyên bên ngoài

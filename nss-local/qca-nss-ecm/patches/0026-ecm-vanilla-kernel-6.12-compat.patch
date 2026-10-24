@@ -1,0 +1,237 @@
+diff -ruN a/ecm_classifier.h b/ecm_classifier.h
+--- a/ecm_classifier.h	2024-11-06 19:33:31.000000000 +0700
++++ b/ecm_classifier.h	2026-10-24 16:32:07.241078505 +0700
+@@ -150,7 +150,7 @@
+ 	bool drop;					/* Drop packet at hand */
+ 	uint32_t flow_qos_tag;				/* QoS tag to use for the packet */
+ 	uint32_t return_qos_tag;			/* QoS tag to use for the packet */
+-#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || ECM_CLASSIFIER_WIFI_ENABLE
++#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || defined ECM_CLASSIFIER_WIFI_ENABLE
+ #ifdef ECM_CLASSIFIER_DSCP_IGS
+ 	uint16_t igs_flow_qos_tag;			/* Ingress QoS tag to use for the packet */
+ 	uint16_t igs_return_qos_tag;			/* Ingress QoS tag to use for the return packet */
+diff -ruN a/ecm_vanilla_compat.h b/ecm_vanilla_compat.h
+--- a/ecm_vanilla_compat.h	1970-01-01 08:00:00.000000000 +0800
++++ b/ecm_vanilla_compat.h	2026-10-24 16:32:09.529099445 +0700
+@@ -0,0 +1,149 @@
++/* Vanilla kernel compatibility shims for QCA NSS ECM.
++ *
++ * QSDK kernels extend struct net_device with priv_flags_ext plus the
++ * IFF_EXT_* flags, and export bridge helpers that upstream Linux does
++ * not provide.  Force-include this header for every ECM object and map
++ * the extended flag word onto priv_flags while making every extended
++ * flag test a compile-time false value.  The QSDK-only paths are then
++ * skipped at runtime and the bridge hooks fail closed.
++ */
++#ifndef _ECM_VANILLA_COMPAT_H
++#define _ECM_VANILLA_COMPAT_H
++
++#include <linux/types.h>
++#include <linux/netdevice.h>
++#include <linux/skbuff.h>
++#include <linux/if_bridge.h>
++#include <linux/if_vlan.h>
++
++#define priv_flags_ext priv_flags
++
++/* Obsolete protocol number dropped from the upstream uapi headers. */
++#ifndef IPPROTO_ETHERIP
++#define IPPROTO_ETHERIP	97
++#endif
++
++#define IFF_EXT_HW_NO_OFFLOAD	0
++#define IFF_EXT_ETH_L2TPV3	0
++#define IFF_EXT_GRE_V4_TAP	0
++#define IFF_EXT_GRE_V6_TAP	0
++#define IFF_EXT_PPP_L2TPV2	0
++#define IFF_EXT_PPP_L2TPV3	0
++#define IFF_EXT_PPP_PPTP	0
++#define IFF_EXT_TUN_TAP		0
++
++/*
++ * br_fdb_find_port_held() is provided by the kernel patch
++ * 0761-net-bridge-export-fdb-port-held.patch.  It resolves the FDB under
++ * RCU and returns the port with a reference held, matching the QSDK
++ * br_port_dev_get() contract.
++ */
++extern struct net_device *br_fdb_find_port_held(const struct net_device *br_dev,
++						const unsigned char *addr, __u16 vid);
++
++static inline struct net_device *
++ecm_vanilla_br_port_dev_get(struct net_device *br, const unsigned char *addr,
++			    struct sk_buff *skb, u32 serial)
++{
++	/* VLAN filtering is not used, so the bridge FDB key uses VID 0. */
++	return br_fdb_find_port_held(br, addr, 0);
++}
++
++static inline bool ecm_vanilla_br_is_hairpin_enabled(struct net_device *dev)
++{
++	return false;
++}
++
++static inline struct net_device *
++ecm_vanilla_br_fdb_find_vid_by_mac(struct net_device *br,
++				   const unsigned char *addr, u16 *vid)
++{
++	return NULL;
++}
++
++static inline bool ecm_vanilla_br_fdb_has_entry(struct net_device *dev,
++						const unsigned char *addr, u16 vid)
++{
++	return false;
++}
++
++#define br_port_dev_get		ecm_vanilla_br_port_dev_get
++#define br_is_hairpin_enabled	ecm_vanilla_br_is_hairpin_enabled
++#define br_fdb_find_vid_by_mac	ecm_vanilla_br_fdb_find_vid_by_mac
++#define br_fdb_has_entry	ecm_vanilla_br_fdb_has_entry
++
++/* QSDK helper returns non-zero when VLAN filtering is NOT enabled. */
++#define br_dev_is_vlan_filter_enabled(dev)	(!br_vlan_enabled(dev))
++
++/* QSDK stats accounting hooks; upstream has no accelerated-port stats. */
++static inline void ecm_vanilla_br_dev_update_stats(struct net_device *dev,
++						   struct rtnl_link_stats64 *stats)
++{
++}
++
++static inline void ecm_vanilla_vlan_dev_update_accel_stats(struct net_device *dev,
++							   struct rtnl_link_stats64 *stats)
++{
++}
++
++static inline int ecm_vanilla_br_vlan_update_stats(struct net_device *dev, u16 vid,
++						   u64 rx_bytes, u64 rx_packets,
++						   u64 tx_bytes, u64 tx_packets)
++{
++	return 0;
++}
++
++static inline void ecm_vanilla_br_fdb_entry_refresh(struct net_device *dev,
++						    const unsigned char *addr, u16 vid)
++{
++}
++
++#define br_dev_update_stats		ecm_vanilla_br_dev_update_stats
++#define __vlan_dev_update_accel_stats	ecm_vanilla_vlan_dev_update_accel_stats
++#define br_vlan_update_stats		ecm_vanilla_br_vlan_update_stats
++#define br_fdb_entry_refresh		ecm_vanilla_br_fdb_entry_refresh
++
++/* QSDK exposes the next device in a stacked VLAN; upstream's immediate
++ * real device is equivalent for the single-tagged setups we support.
++ */
++#define vlan_dev_next_dev(dev)	vlan_dev_real_dev(dev)
++
++/* QSDK neighbour MAC change event, used only to defunct stale nodes. */
++struct neigh_mac_update {
++	unsigned char old_mac[ETH_ALEN];
++	unsigned char update_mac[ETH_ALEN];
++};
++
++static inline int ecm_vanilla_neigh_mac_update_register_notify(struct notifier_block *nb)
++{
++	return 0;
++}
++
++static inline int ecm_vanilla_neigh_mac_update_unregister_notify(struct notifier_block *nb)
++{
++	return 0;
++}
++
++#define neigh_mac_update_register_notify	ecm_vanilla_neigh_mac_update_register_notify
++#define neigh_mac_update_unregister_notify	ecm_vanilla_neigh_mac_update_unregister_notify
++
++/* QSDK route-table change notifiers are not available upstream.  ECM only
++ * uses them to defunct connections when a route changes; without them the
++ * offload keeps working but stale routes are not flushed on change.
++ */
++static inline int ecm_vanilla_route_notifier_register(struct notifier_block *nb)
++{
++	return 0;
++}
++
++static inline int ecm_vanilla_route_notifier_unregister(struct notifier_block *nb)
++{
++	return 0;
++}
++
++#define ip_rt_register_notifier		ecm_vanilla_route_notifier_register
++#define rt6_register_notifier		ecm_vanilla_route_notifier_register
++#define ip_rt_unregister_notifier	ecm_vanilla_route_notifier_unregister
++#define rt6_unregister_notifier		ecm_vanilla_route_notifier_unregister
++
++#endif /* _ECM_VANILLA_COMPAT_H */
+diff -ruN a/frontends/cmn/ecm_ported_ipv4.c b/frontends/cmn/ecm_ported_ipv4.c
+--- a/frontends/cmn/ecm_ported_ipv4.c	2024-11-06 19:33:31.000000000 +0700
++++ b/frontends/cmn/ecm_ported_ipv4.c	2026-10-24 16:54:08.865239539 +0700
+@@ -1128,7 +1128,7 @@
+ 		}
+ #endif
+ 
+-#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || ECM_CLASSIFIER_WIFI_ENABLE
++#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || defined ECM_CLASSIFIER_WIFI_ENABLE
+ #ifdef ECM_CLASSIFIER_DSCP_IGS
+ 		/*
+ 		 * Ingress QoS tag
+diff -ruN a/frontends/cmn/ecm_ported_ipv6.c b/frontends/cmn/ecm_ported_ipv6.c
+--- a/frontends/cmn/ecm_ported_ipv6.c	2024-11-06 19:33:31.000000000 +0700
++++ b/frontends/cmn/ecm_ported_ipv6.c	2026-10-24 16:54:08.869239576 +0700
+@@ -1132,7 +1132,7 @@
+ 		}
+ #endif
+ 
+-#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || ECM_CLASSIFIER_WIFI_ENABLE
++#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || defined ECM_CLASSIFIER_WIFI_ENABLE
+ #ifdef ECM_CLASSIFIER_DSCP_IGS
+ 		/*
+ 		 * Ingress QoS tag
+diff -ruN a/frontends/nss/ecm_nss_ported_ipv4.c b/frontends/nss/ecm_nss_ported_ipv4.c
+--- a/frontends/nss/ecm_nss_ported_ipv4.c	2026-10-24 15:51:39.397841633 +0700
++++ b/frontends/nss/ecm_nss_ported_ipv4.c	2026-10-24 16:29:32.707666293 +0700
+@@ -1213,7 +1213,7 @@
+ #else
+ 			struct nf_tcp_net *tn = nf_tcp_pernet(nf_ct_net(ct));
+ 			uint32_t tcp_be_liberal = tn->tcp_be_liberal;
+-			uint32_t tcp_no_window_check = tn->tcp_no_window_check;
++			uint32_t tcp_no_window_check = 0; /* vanilla kernel has no QSDK tcp_no_window_check */
+ #endif
+ 			ecm_db_connection_address_get(feci->ci, ECM_DB_OBJ_DIR_FROM, addr);
+ 			ecm_front_end_flow_and_return_directions_get(ct, addr, 4, &flow_dir, &return_dir);
+diff -ruN a/frontends/nss/ecm_nss_ported_ipv6.c b/frontends/nss/ecm_nss_ported_ipv6.c
+--- a/frontends/nss/ecm_nss_ported_ipv6.c	2026-10-24 15:51:39.397841633 +0700
++++ b/frontends/nss/ecm_nss_ported_ipv6.c	2026-10-24 16:29:32.707666293 +0700
+@@ -1133,7 +1133,7 @@
+ #else
+ 			struct nf_tcp_net *tn = nf_tcp_pernet(nf_ct_net(ct));
+ 			uint32_t tcp_be_liberal = tn->tcp_be_liberal;
+-			uint32_t tcp_no_window_check = tn->tcp_no_window_check;
++			uint32_t tcp_no_window_check = 0; /* vanilla kernel has no QSDK tcp_no_window_check */
+ #endif
+ 			ecm_front_end_flow_and_return_directions_get(ct, src_ip, 6, &flow_dir, &return_dir);
+ 
+diff -ruN a/frontends/sfe/ecm_sfe_ported_ipv4.c b/frontends/sfe/ecm_sfe_ported_ipv4.c
+--- a/frontends/sfe/ecm_sfe_ported_ipv4.c	2024-11-06 19:33:31.000000000 +0700
++++ b/frontends/sfe/ecm_sfe_ported_ipv4.c	2026-10-24 16:54:08.853239428 +0700
+@@ -1216,7 +1216,7 @@
+ 	}
+ #endif
+ 
+-#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || ECM_CLASSIFIER_WIFI_ENABLE
++#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || defined ECM_CLASSIFIER_WIFI_ENABLE
+ 	/*
+ 	 * DSCP information?
+ 	 */
+diff -ruN a/frontends/sfe/ecm_sfe_ported_ipv6.c b/frontends/sfe/ecm_sfe_ported_ipv6.c
+--- a/frontends/sfe/ecm_sfe_ported_ipv6.c	2024-11-06 19:33:31.000000000 +0700
++++ b/frontends/sfe/ecm_sfe_ported_ipv6.c	2026-10-24 16:54:08.857239465 +0700
+@@ -1267,7 +1267,7 @@
+ 	}
+ #endif
+ 
+-#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || ECM_CLASSIFIER_WIFI_ENABLE
++#if defined ECM_CLASSIFIER_DSCP_ENABLE || defined ECM_CLASSIFIER_EMESH_ENABLE || defined ECM_CLASSIFIER_WIFI_ENABLE
+ 	/*
+ 	 * DSCP information?
+ 	 */

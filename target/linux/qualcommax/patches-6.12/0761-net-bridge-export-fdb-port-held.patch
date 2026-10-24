@@ -1,0 +1,82 @@
+From: WF-810DF bring-up
+Subject: [PATCH] net: bridge: export a reference-holding FDB port lookup
+
+ECM (QCA's acceleration engine connection manager) resolves the egress port
+of a bridged device from its packet hooks.  QSDK provides br_port_dev_get()
+for this, but upstream only has br_fdb_find_port(), which requires RTNL and
+does not take a reference on the returned port.
+
+The ECM hooks run in softirq context, so they cannot take RTNL.  Export a
+small helper that walks the FDB under RCU and returns the port with a
+reference held.
+
+Signed-off-by: WF-810DF bring-up <noreply@localhost>
+---
+--- a/include/linux/if_bridge.h
++++ b/include/linux/if_bridge.h
+@@ -177,6 +177,8 @@
+ struct net_device *br_fdb_find_port(const struct net_device *br_dev,
+ 				    const unsigned char *addr,
+ 				    __u16 vid);
++struct net_device *br_fdb_find_port_held(const struct net_device *br_dev,
++					 const unsigned char *addr, __u16 vid);
+ void br_fdb_clear_offload(const struct net_device *dev, u16 vid);
+ bool br_port_flag_is_set(const struct net_device *dev, unsigned long flag);
+ u8 br_port_get_stp_state(const struct net_device *dev);
+@@ -189,6 +191,13 @@
+ {
+ 	return NULL;
+ }
++
++static inline struct net_device *
++br_fdb_find_port_held(const struct net_device *br_dev,
++		      const unsigned char *addr, __u16 vid)
++{
++	return NULL;
++}
+ 
+ static inline void br_fdb_clear_offload(const struct net_device *dev, u16 vid)
+ {
+--- a/net/bridge/br_fdb.c
++++ b/net/bridge/br_fdb.c
+@@ -267,6 +267,40 @@
+ }
+ EXPORT_SYMBOL_GPL(br_fdb_find_port);
+ 
++/*
++ * br_fdb_find_port_held - locate the bridge port for a MAC address and
++ * return it with a reference held.
++ *
++ * Unlike br_fdb_find_port() this helper does not require RTNL and is safe
++ * to call from atomic context.
++ */
++struct net_device *br_fdb_find_port_held(const struct net_device *br_dev,
++					 const unsigned char *addr, __u16 vid)
++{
++	const struct net_bridge_port *dst;
++	struct net_bridge_fdb_entry *f;
++	struct net_device *dev = NULL;
++	struct net_bridge *br;
++
++	if (!netif_is_bridge_master(br_dev))
++		return NULL;
++
++	br = netdev_priv(br_dev);
++	rcu_read_lock();
++	f = br_fdb_find_rcu(br, addr, vid);
++	if (f) {
++		dst = READ_ONCE(f->dst);
++		if (dst) {
++			dev = dst->dev;
++			dev_hold(dev);
++		}
++	}
++	rcu_read_unlock();
++
++	return dev;
++}
++EXPORT_SYMBOL_GPL(br_fdb_find_port_held);
++
+ struct net_bridge_fdb_entry *br_fdb_find_rcu(struct net_bridge *br,
+ 					     const unsigned char *addr,
+ 					     __u16 vid)

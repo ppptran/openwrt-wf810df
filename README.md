@@ -39,7 +39,24 @@ Additional work may include device bring-up, hardware validation, driver fixes, 
 
 ### Known issues
 
--Not so sure about offload.
+- NSS offload is experimental. The NSS 12.5 core boots and ECM tracks connections, but LAN
+  offload is not functional yet: the YT9215S DSA ports are not registered with NSS.
+  Wi-Fi offload is not enabled.
+
+### NSS offload (experimental)
+
+The QCA NSS 12.5 stack comes from the `nss` feed; the patched `qca-nss-drv` and
+`qca-nss-ecm` packages are carried in the tracked local feed `nss-local/`, which takes
+precedence during `scripts/feeds install`. After the usual `./scripts/feeds update -a`,
+enable:
+
+```
+CONFIG_PACKAGE_kmod-qca-nss-drv=y
+CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+CONFIG_PACKAGE_nss-firmware-ipq50xx=y
+```
+
+The first boot configures UCI automatically (`acceleration_engine=nss`).
 
 ## External resources
 
