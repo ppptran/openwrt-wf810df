@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+
+# The nodes are firmware interfaces, so the module needs the NSS core armed
+# and the DSA ports registered; both are done when this runs. The resync
+# rebuilds the nodes from the live topology in case the module was already
+# loaded by kmodloader before the bridge came up.
+START=95
+
+start() {
+	modprobe qca-dsa-nss 2>/dev/null
+	[ -w /sys/kernel/debug/qca-dsa-nss/resync ] && echo 1 > /sys/kernel/debug/qca-dsa-nss/resync
+}
+
+stop() {
+	rmmod qca-dsa-nss 2>/dev/null
+}
