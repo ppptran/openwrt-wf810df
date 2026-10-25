@@ -154,9 +154,9 @@ ifneq ($(CONFIG_PACKAGE_kmod-qca-nss-drv-mscs),)
 ECM_MAKE_OPTS+=ECM_CLASSIFIER_MSCS_ENABLE=y
 endif
 
-ifneq ($(CONFIG_PACKAGE_kmod-bonding),)
-ECM_MAKE_OPTS+=ECM_INTERFACE_BOND_ENABLE=y
-endif
+# Upstream Linux 6.12 lacks the QSDK bonding notifier API (struct bond_cb,
+# bond_register_cb), so the ECM bond front end cannot be built.
+ECM_MAKE_OPTS+=ECM_INTERFACE_BOND_ENABLE=n
 
 ifneq ($(CONFIG_PACKAGE_kmod-qmi_wwan_q),)
 ECM_MAKE_OPTS+=ECM_INTERFACE_RAWIP_ENABLE=y
