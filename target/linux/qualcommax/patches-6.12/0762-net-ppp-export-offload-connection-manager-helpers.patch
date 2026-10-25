@@ -1,0 +1,381 @@
+From: WF-810DF bring-up
+Subject: [PATCH] net: ppp: export the helpers used by hardware offload managers
+
+Qualcomm's NSS connection managers (ECM and qca-nss-pppoe) expect a set of
+hooks that only the QSDK kernel provides:
+
+  - channel ops to report the transport protocol and to hold/release the
+    channel while a connection manager inspects it,
+  - pppoe_channel_addressing_get(),
+  - ppp_hold_channels()/__ppp_hold_channels()/ppp_release_channels(),
+  - ppp_is_multilink()/__ppp_is_multilink()/ppp_is_xmit_locked(),
+  - ppp_update_stats(), and
+  - a notifier reporting channel connect/disconnect events so the PPPoE
+    connection manager can create/destroy its NSS session.
+
+Backport them on top of mainline 6.12.  ppp_update_stats() is adapted to
+the per-CPU software netstats that mainline uses instead of ppp->stats64.
+
+Signed-off-by: WF-810DF bring-up <noreply@localhost>
+---
+--- a/include/linux/ppp_channel.h
++++ b/include/linux/ppp_channel.h
+@@ -18,6 +18,7 @@
+ #include <linux/list.h>
+ #include <linux/skbuff.h>
+ #include <linux/poll.h>
++#include <linux/notifier.h>
+ #include <net/net_namespace.h>
+ 
+ struct net_device_path;
+@@ -33,6 +34,11 @@
+ 	int	(*fill_forward_path)(struct net_device_path_ctx *,
+ 				     struct net_device_path *,
+ 				     const struct ppp_channel *);
++	/* Return the transport protocol of this channel, e.g. PX_PROTO_OE */
++	int	(*get_channel_protocol)(struct ppp_channel *);
++	/* Take/release a reference on the channel's backing object */
++	void	(*hold)(struct ppp_channel *);
++	void	(*release)(struct ppp_channel *);
+ };
+ 
+ struct ppp_channel {
+@@ -75,6 +81,44 @@
+ /* Get the device name associated with a channel, or NULL if none */
+ extern char *ppp_dev_name(struct ppp_channel *);
+ 
++/* Get the transport protocol of a channel (e.g. PX_PROTO_OE), or -1 */
++extern int ppp_channel_get_protocol(struct ppp_channel *);
++
++/*
++ * Hold the channels attached to a PPP device.  Every held channel must be
++ * released with ppp_release_channels().  The __ variants are called with
++ * the PPP unit lock already taken.
++ */
++extern int ppp_hold_channels(struct net_device *dev,
++			     struct ppp_channel *channels[],
++			     unsigned int chan_sz);
++extern int __ppp_hold_channels(struct net_device *dev,
++			       struct ppp_channel *channels[],
++			       unsigned int chan_sz);
++extern void ppp_release_channels(struct ppp_channel *channels[],
++				 unsigned int chan_sz);
++
++/* PPP unit state used by hardware offload connection managers */
++extern int ppp_is_multilink(struct net_device *dev);
++extern int __ppp_is_multilink(struct net_device *dev);
++extern bool ppp_is_xmit_locked(struct net_device *dev);
++extern void ppp_update_stats(struct net_device *dev, unsigned long rx_packets,
++			     unsigned long rx_bytes, unsigned long tx_packets,
++			     unsigned long tx_bytes, unsigned long rx_errors,
++			     unsigned long tx_errors, unsigned long rx_dropped,
++			     unsigned long tx_dropped);
++
++/*
++ * Channel connection events, emitted after a channel has been attached to
++ * (PPP_CHANNEL_CONNECT) or is about to be detached from (PPP_CHANNEL_DISCONNECT)
++ * a PPP unit.  The argument is the PPP net_device.
++ */
++#define PPP_CHANNEL_CONNECT	1
++#define PPP_CHANNEL_DISCONNECT	2
++
++extern void ppp_channel_connection_register_notify(struct notifier_block *nb);
++extern void ppp_channel_connection_unregister_notify(struct notifier_block *nb);
++
+ /*
+  * SMP locking notes:
+  * The channel code must ensure that when it calls ppp_unregister_channel,
+--- a/include/linux/if_pppox.h
++++ b/include/linux/if_pppox.h
+@@ -55,6 +55,13 @@
+ #define pppoe_pa	proto.pppoe.pa
+ #define pppoe_relay	proto.pppoe.relay
+ 
++/*
++ * Get the addressing information of a PPPoE channel.  Takes a reference on
++ * addressing->dev which the caller must drop with dev_put().
++ */
++extern int pppoe_channel_addressing_get(struct ppp_channel *chan,
++					struct pppoe_opt *addressing);
++
+ static inline struct pppox_sock *pppox_sk(struct sock *sk)
+ {
+ 	return (struct pppox_sock *)sk;
+--- a/drivers/net/ppp/ppp_generic.c
++++ b/drivers/net/ppp/ppp_generic.c
+@@ -295,6 +295,12 @@
+ 
+ static const struct net_device_ops ppp_netdev_ops;
+ 
++/*
++ * Notifier chain used by hardware offload connection managers to learn when
++ * a channel is attached to or detached from a PPP unit.
++ */
++static RAW_NOTIFIER_HEAD(ppp_channel_connection_notifier_list);
++
+ static const struct class ppp_class = {
+ 	.name = "ppp",
+ };
+@@ -3539,6 +3545,14 @@
+ 	spin_unlock(&pch->upl);
+  out:
+ 	mutex_unlock(&pn->all_ppp_mutex);
++
++	if (!ret && ppp->dev) {
++		dev_hold(ppp->dev);
++		raw_notifier_call_chain(&ppp_channel_connection_notifier_list,
++					PPP_CHANNEL_CONNECT, ppp->dev);
++		dev_put(ppp->dev);
++	}
++
+ 	return ret;
+ }
+ 
+@@ -3555,6 +3569,14 @@
+ 	ppp = rcu_replace_pointer(pch->ppp, NULL, lockdep_is_held(&pch->upl));
+ 	spin_unlock(&pch->upl);
+ 	if (ppp) {
++		if (ppp->dev) {
++			dev_hold(ppp->dev);
++			raw_notifier_call_chain(&ppp_channel_connection_notifier_list,
++						PPP_CHANNEL_DISCONNECT,
++						ppp->dev);
++			dev_put(ppp->dev);
++		}
++
+ 		/* remove it from the ppp unit's list */
+ 		ppp_lock(ppp);
+ 		list_del_rcu(&pch->clist);
+@@ -3635,6 +3657,175 @@
+ 	return idr_find(p, n);
+ }
+ 
++/*
++ * Helpers used by hardware offload connection managers, which need to inspect
++ * a PPP unit from contexts that can not take the PPP unit locks themselves.
++ */
++int ppp_channel_get_protocol(struct ppp_channel *chan)
++{
++	if (!chan->ops->get_channel_protocol)
++		return -1;
++
++	return chan->ops->get_channel_protocol(chan);
++}
++EXPORT_SYMBOL(ppp_channel_get_protocol);
++
++int ppp_is_multilink(struct net_device *dev)
++{
++	struct ppp *ppp;
++	unsigned int flags;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return -1;
++
++	ppp = netdev_priv(dev);
++	ppp_lock(ppp);
++	flags = ppp->flags;
++	ppp_unlock(ppp);
++
++	return !!(flags & SC_MULTILINK);
++}
++EXPORT_SYMBOL(ppp_is_multilink);
++
++/* Caller must hold the PPP unit lock. */
++int __ppp_is_multilink(struct net_device *dev)
++{
++	struct ppp *ppp;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return -1;
++
++	ppp = netdev_priv(dev);
++
++	return !!(ppp->flags & SC_MULTILINK);
++}
++EXPORT_SYMBOL(__ppp_is_multilink);
++
++/* Caller must hold the PPP unit lock. */
++int __ppp_hold_channels(struct net_device *dev, struct ppp_channel *channels[],
++			unsigned int chan_sz)
++{
++	struct ppp *ppp;
++	struct channel *pch;
++	int c = 0;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return -1;
++
++	ppp = netdev_priv(dev);
++
++	list_for_each_entry(pch, &ppp->channels, clist) {
++		struct ppp_channel *chan;
++
++		if (!pch->chan)
++			continue;	/* channel is going away */
++
++		if (c == chan_sz)
++			break;
++
++		chan = pch->chan;
++		if (!chan->ops->hold)
++			continue;
++
++		chan->ops->hold(chan);
++		channels[c++] = chan;
++	}
++
++	return c;
++}
++EXPORT_SYMBOL(__ppp_hold_channels);
++
++int ppp_hold_channels(struct net_device *dev, struct ppp_channel *channels[],
++		      unsigned int chan_sz)
++{
++	struct ppp *ppp;
++	int c;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return -1;
++
++	ppp = netdev_priv(dev);
++
++	ppp_lock(ppp);
++	c = __ppp_hold_channels(dev, channels, chan_sz);
++	ppp_unlock(ppp);
++
++	return c;
++}
++EXPORT_SYMBOL(ppp_hold_channels);
++
++void ppp_release_channels(struct ppp_channel *channels[], unsigned int chan_sz)
++{
++	unsigned int c;
++
++	for (c = 0; c < chan_sz; c++) {
++		struct ppp_channel *chan = channels[c];
++
++		chan->ops->release(chan);
++	}
++}
++EXPORT_SYMBOL(ppp_release_channels);
++
++bool ppp_is_xmit_locked(struct net_device *dev)
++{
++	struct ppp *ppp;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return false;
++
++	ppp = netdev_priv(dev);
++
++	return spin_is_locked(&ppp->wlock);
++}
++EXPORT_SYMBOL(ppp_is_xmit_locked);
++
++/*
++ * Account traffic that bypassed the software PPP path (e.g. was forwarded by
++ * an offload engine) to the PPP netdevice statistics.
++ */
++void ppp_update_stats(struct net_device *dev, unsigned long rx_packets,
++		      unsigned long rx_bytes, unsigned long tx_packets,
++		      unsigned long tx_bytes, unsigned long rx_errors,
++		      unsigned long tx_errors, unsigned long rx_dropped,
++		      unsigned long tx_dropped)
++{
++	struct ppp *ppp;
++
++	if (!dev || dev->type != ARPHRD_PPP)
++		return;
++
++	ppp = netdev_priv(dev);
++
++	ppp_xmit_lock(ppp);
++	dev_sw_netstats_tx_add(dev, tx_packets, tx_bytes);
++	dev->stats.tx_errors += tx_errors;
++	dev->stats.tx_dropped += tx_dropped;
++	if (tx_packets)
++		ppp->last_xmit = jiffies;
++	ppp_xmit_unlock(ppp);
++
++	ppp_recv_lock(ppp);
++	dev_sw_netstats_rx_add(dev, rx_bytes);
++	dev->stats.rx_errors += rx_errors;
++	dev->stats.rx_dropped += rx_dropped;
++	if (rx_packets)
++		ppp->last_recv = jiffies;
++	ppp_recv_unlock(ppp);
++}
++EXPORT_SYMBOL(ppp_update_stats);
++
++void ppp_channel_connection_register_notify(struct notifier_block *nb)
++{
++	raw_notifier_chain_register(&ppp_channel_connection_notifier_list, nb);
++}
++EXPORT_SYMBOL(ppp_channel_connection_register_notify);
++
++void ppp_channel_connection_unregister_notify(struct notifier_block *nb)
++{
++	raw_notifier_chain_unregister(&ppp_channel_connection_notifier_list, nb);
++}
++EXPORT_SYMBOL(ppp_channel_connection_unregister_notify);
++
+ /* Module/initialization stuff */
+ 
+ module_init(ppp_init);
+--- a/drivers/net/ppp/pppoe.c
++++ b/drivers/net/ppp/pppoe.c
+@@ -1000,8 +1000,54 @@
+ 	return 0;
+ }
+ 
++/*
++ * Hold/release the socket backing this channel.  Used by connection managers
++ * that need the channel to stay valid while they inspect it.
++ */
++static void pppoe_hold_chan(struct ppp_channel *chan)
++{
++	sock_hold((struct sock *)chan->private);
++}
++
++static void pppoe_release_chan(struct ppp_channel *chan)
++{
++	sock_put((struct sock *)chan->private);
++}
++
++static int pppoe_get_channel_protocol(struct ppp_channel *chan)
++{
++	return PX_PROTO_OE;
++}
++
++/*
++ * Return the session addressing of this channel.  Takes a reference on
++ * addressing->dev which the caller must drop with dev_put().
++ */
++static int pppoe_get_addressing(struct ppp_channel *chan,
++				struct pppoe_opt *addressing)
++{
++	struct pppox_sock *po = pppox_sk((struct sock *)chan->private);
++
++	*addressing = po->proto.pppoe;
++	if (!addressing->dev)
++		return -ENODEV;
++
++	dev_hold(addressing->dev);
++	return 0;
++}
++
++int pppoe_channel_addressing_get(struct ppp_channel *chan,
++				 struct pppoe_opt *addressing)
++{
++	return pppoe_get_addressing(chan, addressing);
++}
++EXPORT_SYMBOL(pppoe_channel_addressing_get);
++
+ static const struct ppp_channel_ops pppoe_chan_ops = {
+ 	.start_xmit = pppoe_xmit,
++	.get_channel_protocol = pppoe_get_channel_protocol,
++	.hold = pppoe_hold_chan,
++	.release = pppoe_release_chan,
+ 	.fill_forward_path = pppoe_fill_forward_path,
+ };
+ 

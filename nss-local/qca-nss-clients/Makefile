@@ -181,7 +181,6 @@ define KernelPackage/qca-nss-drv-pppoe
   DEPENDS:=@(TARGET_qualcommax||TARGET_ipq806x) \
 	   +kmod-qca-nss-drv \
 	   +@NSS_DRV_PPPOE_ENABLE \
-	   +kmod-bonding \
 	   +kmod-ppp \
 	   +kmod-pppoe
   FILES:=$(PKG_BUILD_DIR)/pppoe/qca-nss-pppoe.ko

@@ -129,12 +129,16 @@ ifneq ($(CONFIG_PACKAGE_kmod-ipsec),)
 ECM_MAKE_OPTS+=ECM_INTERFACE_IPSEC_ENABLE=y
 endif
 
-# Upstream Linux 6.12 does not export the QSDK PPP/PPPoE helpers
-# (ppp_hold_channels, pppoe_channel_addressing_get, ppp_is_xmit_locked),
-# so the ECM PPP front end cannot be built against a vanilla kernel.
-ECM_MAKE_OPTS+=ECM_INTERFACE_PPPOE_ENABLE=n \
-			   ECM_INTERFACE_PPTP_ENABLE=n \
-			   ECM_INTERFACE_PPP_ENABLE=n \
+# The PPP/PPPoE helper API is provided by the kernel patch
+# 0762-net-ppp-export-offload-connection-manager-helpers.patch.  Only the
+# PPPoE session manager (qca-nss-pppoe) drives the front end; PPTP and
+# L2TPv2 still need QSDK-only kernel interfaces.
+ifneq ($(CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe),)
+ECM_MAKE_OPTS+=ECM_INTERFACE_PPP_ENABLE=y \
+			   ECM_INTERFACE_PPPOE_ENABLE=y
+endif
+
+ECM_MAKE_OPTS+=ECM_INTERFACE_PPTP_ENABLE=n \
 			   ECM_INTERFACE_L2TPV2_ENABLE=n
 
 ifneq ($(CONFIG_PACKAGE_kmod-gre)$(CONFIG_PACKAGE_kmod-gre6),)
