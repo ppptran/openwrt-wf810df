@@ -5,6 +5,10 @@ CFG=/etc/board.json
 . /usr/share/libubox/jshn.sh
 . /lib/functions/ipv4.sh
 
+# a crash can leave board.json non-empty but garbage, which board_detect treats as valid
+if [ -s $CFG ] && ! jsonfilter -e '@' <$CFG >/dev/null 2>&1; then
+	rm -f $CFG
+fi
 [ -s $CFG ] || /bin/board_detect || exit 1
 [ -s /etc/config/network -a -s /etc/config/system ] && exit 0
 
