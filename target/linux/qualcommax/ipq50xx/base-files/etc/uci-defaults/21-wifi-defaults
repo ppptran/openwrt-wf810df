@@ -1,0 +1,24 @@
+#!/bin/sh
+
+# Bring the default APs up without a manual UCI round-trip. wifi-scripts
+# generates one disabled default_radioN interface per radio when the board
+# provides no wlan defaults, which leaves both radios quiet after flashing.
+
+[ -x /sbin/wifi ] || exit 0
+
+if [ ! -f /etc/config/wireless ]; then
+	wifi config >/dev/null 2>&1
+	[ -f /etc/config/wireless ] || exit 0
+fi
+
+uci -q show wireless | sed -n 's/^\(wireless\.radio[0-9]*\)=wifi-device$/\1/p' | while read -r section; do
+	uci -q set "$section.disabled=0"
+done
+
+uci -q show wireless | sed -n 's/^\(wireless\.default_radio[0-9]*\)=wifi-iface$/\1/p' | while read -r section; do
+	uci -q set "$section.disabled=0"
+done
+
+uci -q commit wireless
+
+exit 0
