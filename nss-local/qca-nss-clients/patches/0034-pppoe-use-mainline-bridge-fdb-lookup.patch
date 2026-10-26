@@ -1,0 +1,29 @@
+From: WF-810DF bring-up
+Subject: [PATCH] pppoe: use the mainline bridge FDB lookup
+
+QSDK's br_port_dev_get() does not exist upstream.  The kernel patch
+0761-net-bridge-export-fdb-port-held.patch exports the equivalent
+br_fdb_find_port_held(), which also returns the port with a reference held,
+so the PPPoE connection manager can use it unchanged.
+
+Signed-off-by: WF-810DF bring-up <noreply@localhost>
+---
+--- a/pppoe/nss_connmgr_pppoe.c
++++ b/pppoe/nss_connmgr_pppoe.c
+@@ -301,7 +301,7 @@
+ 		 * Searching this physical port in the fdb database with the server mac
+ 		 * address of the session.
+ 		 */
+-		struct net_device *port = br_port_dev_get(opt.dev, info->server_mac, NULL, 0);
++		struct net_device *port = br_fdb_find_port_held(opt.dev, info->server_mac, 0);
+ 		if (!port) {
+ 			nss_connmgr_pppoe_warn("%px: Unable to get the bridge port device from the bridge interface: %s\n",
+ 						dev, opt.dev->name);
+@@ -315,7 +315,7 @@
+ 					info->local_mac, info->server_mac, opt.dev->name, npm_create->base_if_num);
+ 		/*
+-		 * Release the port which was held by the br_port_dev_get() call.
++		 * Release the port which was held by the FDB lookup.
+ 		 */
+ 		dev_put(port);
+ 	} else {

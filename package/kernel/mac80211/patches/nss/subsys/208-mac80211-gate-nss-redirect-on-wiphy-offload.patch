@@ -1,0 +1,30 @@
+Only redirect a vif through NSS when its wiphy is actually NSS offloaded.
+
+ath11k sets the new wiphy flag for radios whose data path runs in NSS;
+the QCN6122 external radio is kept on the host path (see the ath11k
+gate patch), so mac80211 must not create a virt interface for it.
+
+---
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -6149,6 +6149,9 @@
+ 
+ 	u16 hw_timestamp_max_peers;
+ 
++	/* QSDK: data path is NSS offloaded, mac80211 creates a NSS virt if */
++	bool nss_offload;
++
+ 	int n_radio;
+ 	const struct wiphy_radio *radio;
+ 
+--- a/net/mac80211/iface.c
++++ b/net/mac80211/iface.c
+@@ -1572,7 +1572,7 @@
+ 
+ #ifdef CPTCFG_MAC80211_NSS_SUPPORT
+ 	sdata->nssctx = NULL;
+-	if (nss_redirect) {
++	if (nss_redirect && sdata->local->hw.wiphy->nss_offload) {
+ 		sdata->nssctx = nss_virt_if_create_sync(dev);
+ 		if (sdata->nssctx) {
+ 			sdata_info(sdata, "Created a NSS virtual interface\n");

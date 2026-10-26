@@ -1,0 +1,55 @@
+Keep the external QCN6122 radio on the host data path by default.
+
+The retail 12.5 IPQ5018 wifili firmware traps (NSS FW coredump -> kernel
+panic) shortly after the QCN6122 external wifili interface (215) is
+registered. Only enable NSS for it when nss_offload_external=1.
+
+---
+--- a/drivers/net/wireless/ath/ath11k/core.c
++++ b/drivers/net/wireless/ath/ath11k/core.c
+@@ -24,6 +24,10 @@
+ #ifdef CPTCFG_ATH11K_NSS_SUPPORT
+ module_param_named(nss_offload, nss_offload, uint, 0644);
+ MODULE_PARM_DESC(nss_offload, "Enable NSS Offload support");
++
++unsigned int nss_offload_external;
++module_param_named(nss_offload_external, nss_offload_external, uint, 0644);
++MODULE_PARM_DESC(nss_offload_external, "Enable NSS Offload support for the external QCN6122 radio");
+ #endif
+ 
+ unsigned int ath11k_debug_mask;
+@@ -2436,7 +2440,9 @@
+ 	/* We have disabled NSS Offload support in the starting.
+ 	 * Re-enabling it if it was originally enabled in the MODULE_PARM_DESC.
+ 	 */
+-	ab->nss.enabled = nss_offload;
++	ab->nss.enabled = nss_offload &&
++			  (ab->hw_rev != ATH11K_HW_QCN6122_HW10 ||
++			   nss_offload_external);
+ 
+ 	ret = ath11k_core_qmi_firmware_ready(ab);
+ 	if (ret)
+@@ -2757,9 +2763,11 @@
+ 		ath11k_err(ab, "failed to pre init firmware: %d", ret);
+ 		return ret;
+ 	}
+-	ab->nss.enabled = nss_offload;
++	ab->nss.enabled = nss_offload &&
++			  (ab->hw_rev != ATH11K_HW_QCN6122_HW10 ||
++			   nss_offload_external);
+ 
+-	if (nss_offload)
++	if (ab->nss.enabled)
+ 		ab->nss.stats_enabled = 1;
+ 
+ 	if (ab->nss.enabled && ab->hw_params.max_tx_ring > DP_TCL_NUM_RING_MAX)
+--- a/drivers/net/wireless/ath/ath11k/mac.c
++++ b/drivers/net/wireless/ath/ath11k/mac.c
+@@ -10937,6 +10937,7 @@
+ 	ar->hw->wiphy->available_antennas_tx = cap->tx_chain_mask;
+ 
+ 	ar->hw->wiphy->interface_modes = ab->hw_params.interface_modes;
++	ar->hw->wiphy->nss_offload = ab->nss.enabled;
+ 
+ 	if (ab->hw_params.single_pdev_only && ar->supports_6ghz)
+ 		ieee80211_hw_set(ar->hw, SINGLE_SCAN_ON_ALL_BANDS);

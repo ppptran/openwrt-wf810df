@@ -39,24 +39,55 @@ Additional work may include device bring-up, hardware validation, driver fixes, 
 
 ### Known issues
 
-- NSS offload is experimental. The NSS 12.5 core boots and ECM tracks connections, but LAN
-  offload is not functional yet: the YT9215S DSA ports are not registered with NSS.
-  Wi-Fi offload is not enabled.
+- Wi-Fi offload is enabled for the 2.4 GHz radio only. The external QCN6122 5 GHz radio stays
+  on the host data path because the retail 12.5 IPQ5018 wifili firmware traps when the
+  external wifili interface is registered; `nss_offload_external=1` enables it only with
+  firmware that supports the external radio.
+- ECM does not count accelerated Wi-Fi flows yet (`accelerated_count` stays 0); the Wi-Fi data
+  path itself runs through NSS.
+- ECM's route and neighbour notifiers are stubs in this build, so accelerated flows are not
+  flushed on a route change or WAN failover; they age out instead.
+- VLAN-aware bridges (`vlan_filtering 1`) are not handled by this ECM version.
+- Router-terminated traffic (iperf3 to the router itself) and LAN↔LAN switch traffic are
+  never accelerated — the former stays in the CPU, the latter is already pure L2 forwarding.
 
-### NSS offload (experimental)
+### NSS offload
 
-The QCA NSS 12.5 stack comes from the `nss` feed; the patched `qca-nss-drv` and
-`qca-nss-ecm` packages are carried in the tracked local feed `nss-local/`, which takes
-precedence during `scripts/feeds install`. After the usual `./scripts/feeds update -a`,
-enable:
+Offload is enabled and verified on hardware for WAN (IPQ5018 GMAC), LAN (YT9215S DSA, using
+an 802.1Q tagger on the CPU port) and PPPoE.
+
+The stack comes from the `nss` feed; the patched `qca-nss-drv`, `qca-nss-clients`,
+`qca-nss-ecm` and `qca-dsa-nss` packages are carried in the tracked local feed `nss-local/`,
+which takes precedence during `scripts/feeds install`. After the usual
+`./scripts/feeds update -a`, enable:
 
 ```
 CONFIG_PACKAGE_kmod-qca-nss-drv=y
+CONFIG_PACKAGE_kmod-qca-nss-dp=y
 CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+CONFIG_PACKAGE_kmod-qca-dsa-nss=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
 CONFIG_PACKAGE_nss-firmware-ipq50xx=y
 ```
 
 The first boot configures UCI automatically (`acceleration_engine=nss`).
+
+Running versions are `qca-nss-drv` 12.5, `qca-nss-clients` 12.5 and firmware
+`NSS.FW.12.5-210-MP.R`; ECM is built from the 12.5 source against the same ABI, selected by
+`CONFIG_NSS_FIRMWARE_VERSION_12_5=y`. The `nss` feed is pinned to the tested revision
+`0d970db` in `feeds.conf`. `.config` also enables `CONFIG_ATH11K_NSS_SUPPORT`,
+`CONFIG_ATH11K_MEM_PROFILE_512M`, `CONFIG_PACKAGE_MAC80211_NSS_SUPPORT` and
+`CONFIG_PACKAGE_MAC80211_NSS_REDIRECT` (mac80211 loads with `nss_redirect=1`); ath11k loads
+with `nss_offload=1 frame_mode=2`.
+
+Wi-Fi offload is gated per radio: `nss_offload_external` (default 0) keeps the QCN6122 out of
+the NSS data path, and `wiphy->nss_offload` makes mac80211 create NSS virtual interfaces only
+for radios that are actually offloaded. The 2.4 GHz radio (`c000000.wifi`) offloads;
+the 5 GHz radio (`b00a040.wifi`) runs on the host path.
+
+The LAN path works by moving the switch to a `yt921x-8021q` tagger (plain 802.1Q towards the
+CPU port), with `qca-dsa-nss` creating one NSS dynamic VLAN interface per bridge/port.
 
 ## External resources
 

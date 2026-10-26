@@ -1,0 +1,58 @@
+--- a/drivers/net/wireless/ath/ath11k/nss.c
++++ b/drivers/net/wireless/ath/ath11k/nss.c
+@@ -33,6 +33,30 @@
+ 	return ATH11K_NSS_OPMODE_UNKNOWN;
+ }
+ 
++static struct ath11k_vif *ath11k_nss_get_arvif_from_dev(struct net_device *dev)
++{
++	struct wireless_dev *wdev;
++	struct ieee80211_vif *vif;
++	struct ath11k_vif *arvif;
++
++	if (!dev)
++		return NULL;
++
++	wdev = dev->ieee80211_ptr;
++	if (!wdev)
++		return NULL;
++
++	vif = wdev_to_ieee80211_vif(wdev);
++	if (!vif)
++		return NULL;
++
++	arvif = (struct ath11k_vif *)vif->drv_priv;
++	if (!arvif)
++		return NULL;
++
++	return arvif;
++}
++
+ static void ath11k_nss_wifili_stats_sync(struct ath11k_base *ab,
+ 					 struct nss_wifili_stats_sync_msg *wlsoc_stats)
+ {
+@@ -277,7 +301,7 @@
+ 
+ /*-----------------------------Events/Callbacks------------------------------*/
+ 
+-void ath11k_nss_wifili_event_receive(struct ath11k_base *ab, struct nss_wifili_msg *msg)
++static void ath11k_nss_wifili_event_receive(struct ath11k_base *ab, struct nss_wifili_msg *msg)
+ {
+ 	u32 msg_type = msg->cm.type;
+ 	enum nss_cmn_response response = msg->cm.response;
+--- a/drivers/net/wireless/ath/ath11k/hw.c
++++ b/drivers/net/wireless/ath/ath11k/hw.c
+@@ -1483,6 +1483,13 @@
+ 	.rx_desc_mpdu_start_addr2 = ath11k_hw_ipq9074_rx_desc_mpdu_start_addr2,
+ 	.get_ring_selector = ath11k_hw_ipq8074_get_tcl_ring_selector,
+ 	.rx_desc_get_hal_mpdu_len = ath11k_hw_qcn9074_rx_desc_get_hal_mpdu_len,
++#ifdef CPTCFG_ATH11K_MEM_PROFILE_512M
++	.rx_desc_get_offset = ath11k_hw_qcn9074_rx_desc_get_offset,
++#endif
++	.rx_desc_get_mpdu_frame_ctl = ath11k_hw_qcn9074_rx_desc_get_mpdu_frame_ctl,
++	.rx_desc_dot11_hdr_fields_valid = ath11k_hw_qcn9074_rx_desc_dot11_hdr_fields_valid,
++	.rx_desc_get_dot11_hdr = ath11k_hw_qcn9074_rx_desc_get_dot11_hdr,
++	.rx_desc_get_crypto_header = ath11k_hw_qcn9074_rx_desc_get_crypto_hdr,
+ };
+ 
+ #define ATH11K_TX_RING_MASK_0 BIT(0)

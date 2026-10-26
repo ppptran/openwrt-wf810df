@@ -1,0 +1,26 @@
+From: WF-810DF bring-up
+
+vlanmgr: allow physical port 0
+
+ipq50xx numbers its NSS datapath interfaces from 0 (wan is dp1/if_num 0),
+but the vlan manager only accepts physical ports 1..6, so creating wan.<vid>
+fails with "wan: 0 is not valid physical port" and the VLAN is never
+registered with NSS. QSDK only enables vlan-mgr on ipq807x/ipq60xx, where
+port numbering starts at 1, so this assumption was never exercised.
+
+The port arrays use 0 as the empty sentinel, but those walks are confined
+to the PPE/VSI paths which are not built for ipq50xx
+(NSS_VLAN_MGR_PPE_SUPPORT) and to bonding paths, so accepting 0 is safe on
+this target.
+
+--- a/vlan/nss_vlan_mgr.c
++++ b/vlan/nss_vlan_mgr.c
+@@ -74,7 +74,7 @@
+ #endif
+ #endif /* CONFIG_DYNAMIC_DEBUG */
+ 
+-#define NSS_VLAN_PHY_PORT_MIN 1
++#define NSS_VLAN_PHY_PORT_MIN 0
+ #define NSS_VLAN_PHY_PORT_MAX 6
+ #define NSS_VLAN_PHY_PORT_NUM 8
+ #define NSS_VLAN_PHY_PORT_CHK(n) ((n) >= NSS_VLAN_PHY_PORT_MIN && (n) <= NSS_VLAN_PHY_PORT_MAX)

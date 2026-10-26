@@ -39,24 +39,54 @@ Trong này có thể bao gồm những thành phần như xác thực phần c�
 
 ### Các vấn đề đã biết
 
-- Offload NSS vẫn đang thử nghiệm. Core NSS 12.5 boot được và ECM có theo dõi kết nối,
-  nhưng offload LAN chưa hoạt động: các cổng DSA YT9215S chưa được đăng ký với NSS.
-  Offload Wi-Fi chưa được bật.
+- Offload Wi-Fi chỉ bật cho radio 2.4 GHz. Radio 5 GHz (QCN6122 ngoài) vẫn chạy trên CPU vì
+  firmware wifili 12.5 retail của IPQ5018 bị trap khi interface wifili ngoài được đăng ký;
+  `nss_offload_external=1` chỉ dùng khi có firmware hỗ trợ radio ngoài.
+- ECM chưa đếm flow Wi-Fi đã tăng tốc (`accelerated_count` vẫn 0); bản thân data path Wi-Fi
+  đã đi qua NSS.
+- Các notifier route/neighbour của ECM trong bản build này chỉ là stub, nên flow đã tăng tốc
+  không bị xoá khi route thay đổi hoặc WAN failover; chúng chỉ hết hạn theo thời gian.
+- Bridge có VLAN filtering (`vlan_filtering 1`) chưa được phiên bản ECM này xử lý.
+- Traffic kết thúc tại router (iperf3 vào chính router) và traffic LAN↔LAN không bao giờ được
+  tăng tốc — loại đầu vẫn đi qua CPU, loại sau vốn đã là chuyển mạch L2 thuần.
 
-### Offload NSS (thử nghiệm)
+### Offload NSS
 
-Stack QCA NSS 12.5 lấy từ feed `nss`; hai gói đã được patch là `qca-nss-drv` và
-`qca-nss-ecm` nằm trong feed cục bộ `nss-local/` (được track trong repo) và sẽ được ưu
-tiên khi chạy `scripts/feeds install`. Sau khi chạy `./scripts/feeds update -a` như bình
-thường, bật:
+Offload đã được bật và kiểm chứng trên phần cứng cho WAN (GMAC của IPQ5018), LAN (DSA
+YT9215S, dùng tagger 802.1Q trên cổng CPU) và PPPoE.
+
+Stack lấy từ feed `nss`; các gói đã được patch là `qca-nss-drv`, `qca-nss-clients`,
+`qca-nss-ecm` và `qca-dsa-nss` nằm trong feed cục bộ `nss-local/` (được track trong repo) và
+sẽ được ưu tiên khi chạy `scripts/feeds install`. Sau khi chạy `./scripts/feeds update -a`
+như bình thường, bật:
 
 ```
 CONFIG_PACKAGE_kmod-qca-nss-drv=y
+CONFIG_PACKAGE_kmod-qca-nss-dp=y
 CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+CONFIG_PACKAGE_kmod-qca-dsa-nss=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
 CONFIG_PACKAGE_nss-firmware-ipq50xx=y
 ```
 
 Lần boot đầu tiên sẽ tự cấu hình UCI (`acceleration_engine=nss`).
+
+Phiên bản đang chạy là `qca-nss-drv` 12.5, `qca-nss-clients` 12.5 và firmware
+`NSS.FW.12.5-210-MP.R`; ECM build từ source 12.5 theo cùng ABI, chọn bằng
+`CONFIG_NSS_FIRMWARE_VERSION_12_5=y`. Feed `nss` được pin về revision đã test `0d970db`
+trong `feeds.conf`. `.config` cũng bật `CONFIG_ATH11K_NSS_SUPPORT`,
+`CONFIG_ATH11K_MEM_PROFILE_512M`, `CONFIG_PACKAGE_MAC80211_NSS_SUPPORT` và
+`CONFIG_PACKAGE_MAC80211_NSS_REDIRECT` (mac80211 load với `nss_redirect=1`); ath11k load với
+`nss_offload=1 frame_mode=2`.
+
+Offload Wi-Fi được gate theo từng radio: `nss_offload_external` (mặc định 0) giữ QCN6122
+ngoài data path NSS, và `wiphy->nss_offload` khiến mac80211 chỉ tạo NSS virtual interface cho
+radio thực sự offload. Radio 2.4 GHz (`c000000.wifi`) offload; radio 5 GHz (`b00a040.wifi`)
+chạy trên CPU.
+
+Đường LAN hoạt động bằng cách chuyển switch sang tagger `yt921x-8021q` (802.1Q thuần về phía
+cổng CPU), `qca-dsa-nss` tạo một interface VLAN động của NSS cho mỗi bridge/cổng.
 
 
 ## Tài nguyên bên ngoài
